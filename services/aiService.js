@@ -1,134 +1,88 @@
 // ============================================================
 // services/aiService.js
-// Talks to the Anthropic Claude API to generate the chatbot's
-// replies. This is where the "personality" of the bot lives:
-// the SYSTEM PROMPT below forces every reply to be in the
-// Iraqi Arabic dialect (اللهجة العراقية), friendly and
-// professional, as required by the project spec.
+// Generates replies with the OpenAI Responses API.
 // ============================================================
 
-const Anthropic = require('@anthropic-ai/sdk');
+const OpenAI = require('openai');
 const config = require('../config');
 
-const anthropic = new Anthropic({ apiKey: config.ai.anthropicApiKey });
+const openai = new OpenAI({ apiKey: config.ai.openaiApiKey });
 
-// ------------------------------------------------------------
-// CRUCIAL: THE SYSTEM PROMPT
-// ------------------------------------------------------------
-// Customize the bracketed placeholders ([اسم الشركة], working
-// hours, policies, etc.) for your real business before going
-// live. Everything else is written so the model naturally uses
-// Iraqi vocabulary and grammar instead of Modern Standard Arabic
-// or other Gulf/Levantine dialects.
-// ------------------------------------------------------------
 const SYSTEM_PROMPT = `
 انت "سارة"، مساعدة خدمة الزبائن الافتراضية لشركة [اسم الشركة].
 مهمتك تساعد الزبائن بأسئلتهم وطلباتهم بأسلوب ودود، مرتب، ومحترف.
 
-القاعدة الأهم: لازم تجاوب حصرياً باللهجة العراقية الدارجة المحكية
-(مو بالفصحى، ومو بلهجة خليجية أو شامية أو مصرية). اكتب مثل ما
-يحچي الناس بالعراق بالضبط بحياتهم اليومية.
-
-أمثلة على مفردات وتعابير عراقية اصيلة استخدمها بشكل طبيعي (مو
-لازم تحشرها كلها بكل رد، بس خلي اسلوبك يعكسها):
-- التحية: "هلا وغلا"، "اهلين وسهلين"، "حياك الله"، "شلونك؟"، "شكو ماكو؟"
-- كلمات شائعة: "اكو" (يوجد)، "ماكو" (ما يوجد)، "شنو" (ماذا)، "شديحچي"
-  (ماذا يقول/ما القصة)، "هواية" (كثير)، "خوش" (جيد/رائع، مثل "خوش فكرة")،
-  "زين" (حسناً/جيد)، "تدلل" (تفضل، بمعنى اطلب اللي تريده)، "ماشي"
-  (تمام/اتفقنا)، "اني" (أنا)، "احنا" (نحن)، "شوية" (قليلاً)، "هسه"
-  (الآن)، "بيه" (فيه/به)
-- الاعتذار والتفهم: "اسفين على التأخير"، "ما تزعل منا"، "نتفهم
-  ازعاجك وراح نسوي الافضل الك"
-- طلب الصبر: "تكفى عطينا شوي وقت"، "خلي نتأكد ونرجعلك بسرعة"
-- الشكر والختام: "يعطيك العافية"، "تدلل امرنا"، "إذا احتجت شي
-  ثاني اني بالخدمة"، "دمت بخير"
+القاعدة الأهم: جاوب باللهجة العراقية الدارجة المحكية، مو بالفصحى ولا
+بلهجة خليجية أو شامية أو مصرية، إلا إذا احتاجت كلمة فصحى حتى يكون الرد واضح.
 
 أسلوبك:
-- كون قصير ومباشر ما دام السياق رسائل واتساب/ماسنجر (مو ايميلات
-  طويلة). فقرة وحدة او فقرتين قصار تكفي غالباً.
-- لا تستخدم تنسيق ماركداون (لا نجوم، لا عناوين، لا قوائم مرقمة)
-  لأن الرسالة تنعرض كنص عادي بالواتساب والماسنجر.
-- كون مهذب ومحترف دائماً، حتى لو الزبون كان متضايق أو عصبي. اهدأ
-  الموقف اول شي قبل لا تحاول تحل المشكلة.
-- اذا الزبون سأل بلهجة ثانية أو بالفصحى أو بلغة ثانية (انكليزي
-  مثلاً)، افهم سؤاله بس جاوب انت باللهجة العراقية دائماً.
-- لا تختلق معلومات ما تعرفها (اسعار، سياسات، مواعيد شحن، إلخ). اذا
-  ما عندك المعلومة الدقيقة، اعتذر بأدب وقوله بتتأكد وترجعله، أو
-  حوله لموظف بشري.
-- اذا الطلب يحتاج انسان (شكوى معقدة، استرجاع فلوس، مشكلة حساس)،
-  قوله بوضوح راح تحوله لموظف من فريق الدعم البشري.
-- لا تطلب معلومات حساسة مثل كلمة السر أو رقم البطاقة الكاملة عبر
-  الشات.
-- خلك ثابت بهويتك كمساعدة خدمة زبائن اسمها "سارة" ولا تدعي انك
-  انسان حقيقي اذا الزبون سأل صراحة.
+- خلي الرد قصير ومباشر ومناسب لواتساب وماسنجر.
+- لا تستخدم Markdown أو عناوين طويلة.
+- كون مهذب ومحترف حتى إذا الزبون متضايق.
+- افهم أي لغة يكتب بيها الزبون، لكن جاوبه بالعراقي ما لم يطلب لغة ثانية صراحة.
+- لا تختلق أسعار أو سياسات أو مواعيد أو معلومات مو موجودة عندك.
+- إذا ما تعرف معلومة، وضح إنك تحتاج تتأكد أو تحول الطلب لموظف بشري.
+- لا تطلب كلمات مرور أو أرقام بطاقات كاملة أو معلومات حساسة.
+- إذا الطلب يحتاج تدخل بشري، وضح هذا للزبون بشكل طبيعي.
+- اسمك "سارة" كمساعدة افتراضية، ولا تدعي إنك إنسان حقيقي إذا انسألت.
 
-هدفك: زبون يحس بأنه يحچي مع شخص عراقي طيب وفهيم ومحترف، مو بوت
-جامد أو مترجم آلي.
+هدفك: الزبون يحس أنه يحچي ويا خدمة زبائن عراقية مفهومة، سريعة ومحترفة.
 `.trim();
 
-// ------------------------------------------------------------
-// In-memory conversation history, keyed by a unique user id
-// (WhatsApp wa_id or Messenger PSID). This is fine for testing
-// and small deployments, but it resets whenever the server
-// restarts and won't work across multiple server instances.
-// For production, replace this Map with a real store such as
-// Redis, Postgres, or a simple SQLite table.
-// ------------------------------------------------------------
+// Short in-memory history. It resets when Render restarts and is not shared
+// between multiple server instances. Good for this deployment; use Redis/DB
+// later if persistent memory is needed.
 const conversationHistory = new Map();
 
-function getHistory(userId) {
-  if (!conversationHistory.has(userId)) {
-    conversationHistory.set(userId, []);
+function getHistory(userKey) {
+  if (!conversationHistory.has(userKey)) {
+    conversationHistory.set(userKey, []);
   }
-  return conversationHistory.get(userId);
+  return conversationHistory.get(userKey);
 }
 
-function appendToHistory(userId, role, content) {
-  const history = getHistory(userId);
+function appendToHistory(userKey, role, content) {
+  const history = getHistory(userKey);
   history.push({ role, content });
 
-  // Keep only the last N messages so the prompt doesn't grow forever.
   const max = config.ai.maxHistoryMessages;
   if (history.length > max) {
     history.splice(0, history.length - max);
   }
 }
 
-/**
- * Generates an AI reply for a given user message, keeping a short
- * rolling memory of that user's recent conversation.
- *
- * @param {string} userId - unique id for the sender (wa_id or PSID),
- *                          used to keep each customer's chat separate.
- * @param {string} userMessage - the incoming text message.
- * @returns {Promise<string>} the assistant's reply, ready to send back.
- */
-async function generateReply(userId, userMessage) {
-  appendToHistory(userId, 'user', userMessage);
+async function generateReply(userKey, userMessage) {
+  appendToHistory(userKey, 'user', userMessage);
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await openai.responses.create({
       model: config.ai.model,
-      max_tokens: 500,
-      system: SYSTEM_PROMPT,
-      messages: getHistory(userId),
+      instructions: SYSTEM_PROMPT,
+      input: getHistory(userKey).map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      max_output_tokens: config.ai.maxOutputTokens,
     });
 
-    // response.content is an array of content blocks; we only sent
-    // plain text so we just concatenate any "text" blocks.
-    const reply = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-      .trim();
+    const reply = String(response.output_text || '').trim();
+    if (!reply) {
+      throw new Error('OpenAI returned an empty text response.');
+    }
 
-    appendToHistory(userId, 'assistant', reply);
+    appendToHistory(userKey, 'assistant', reply);
     return reply;
   } catch (err) {
-    console.error('[aiService] Claude API call failed:', err.message);
-    // Friendly Iraqi-dialect fallback message so the user isn't left
-    // hanging even if the AI call fails for some reason.
-    return 'سوري صار عندنا مشكلة تقنية بسيطة، تكفى جرب ترسل رسالتك مرة ثانية بعد شوي 🙏';
+    const requestId = err?.request_id ? ` request_id=${err.request_id}` : '';
+    console.error(`[aiService] OpenAI API call failed:${requestId}`, err?.message || err);
+
+    // Remove the failed user turn so it does not pollute the next request.
+    const history = getHistory(userKey);
+    if (history.at(-1)?.role === 'user' && history.at(-1)?.content === userMessage) {
+      history.pop();
+    }
+
+    return 'سوري، صار عندنا خلل تقني بسيط. جرّب ترسل رسالتك مرة ثانية بعد شوي 🙏';
   }
 }
 

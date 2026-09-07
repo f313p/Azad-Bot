@@ -1,20 +1,32 @@
 // ============================================================
 // handlers/webhookHandler.js
-// Parses the two different payload shapes Meta sends
-// (WhatsApp Cloud API vs Messenger Send/Receive API), pulls out
-// the sender id + text, asks the AI service for a reply, and
-// sends that reply back through the right channel.
+// Parses WhatsApp/Messenger webhook payloads and routes messages.
 // ============================================================
 
 const aiService = require('../services/aiService');
 const metaService = require('../services/metaService');
 
-/**
- * Entry point called from the webhook route for every POST body
- * Meta sends us. `body.object` tells us whether this is a
- * WhatsApp update or a Messenger/Page update.
- */
+// Meta can retry webhook deliveries. Keep a short-lived in-memory set so the
+// same message does not produce duplicate AI replies during normal retries.
+const processedEventIds = new Map();
+const DEDUPE_TTL_MS = 10 * 60 * 1000;
+
+function alreadyProcessed(id) {
+  if (!id) return false;
+  const now = Date.now();
+
+  for (const [key, timestamp] of processedEventIds) {
+    if (now - timestamp > DEDUPE_TTL_MS) processedEventIds.delete(key);
+  }
+
+  if (processedEventIds.has(id)) return true;
+  processedEventIds.set(id, now);
+  return false;
+}
+
 async function processWebhookEvent(body) {
+  if (!body || typeof body !== 'object') return;
+
   if (body.object === 'whatsapp_business_account') {
     await handleWhatsAppPayload(body);
   } else if (body.object === 'page') {
@@ -24,38 +36,30 @@ async function processWebhookEvent(body) {
   }
 }
 
-// ------------------------------------------------------------
-// WhatsApp Cloud API
-// ------------------------------------------------------------
 async function handleWhatsAppPayload(body) {
   for (const entry of body.entry || []) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
 
-      // `value.statuses` = delivery/read receipts for messages WE sent.
-      // We don't need to reply to those, just skip them.
-      if (value.statuses) {
-        continue;
-      }
+      // Delivery/read status notifications are not customer messages.
+      if (Array.isArray(value.statuses) && value.statuses.length > 0) continue;
 
       for (const message of value.messages || []) {
-        // Only handle plain text messages in this starter project.
-        // Extend here for message.type === 'image' | 'audio' | 'document' etc.
-        if (message.type !== 'text') {
+        if (alreadyProcessed(`wa:${message.id}`)) continue;
+
+        if (message.type !== 'text' || !message.text?.body) {
           console.log(`[webhookHandler] Skipping unsupported WhatsApp message type: ${message.type}`);
           continue;
         }
 
-        const fromWaId = message.from; // e.g. "9647XXXXXXXX"
-        const text = message.text.body;
+        const fromWaId = message.from;
+        const text = message.text.body.trim();
+        if (!fromWaId || !text) continue;
 
         console.log(`[WhatsApp] ${fromWaId}: ${text}`);
 
-        // Fire-and-forget style processing so the webhook route can
-        // ack Meta immediately (see routes/webhook.js). Errors are
-        // caught and logged, never thrown back into Meta's request.
         markAndReplyWhatsApp(fromWaId, message.id, text).catch((err) =>
-          console.error('[webhookHandler] WhatsApp handling failed:', err)
+          console.error('[webhookHandler] WhatsApp handling failed:', err?.message || err)
         );
       }
     }
@@ -64,34 +68,30 @@ async function handleWhatsAppPayload(body) {
 
 async function markAndReplyWhatsApp(fromWaId, messageId, text) {
   await metaService.markWhatsAppMessageAsRead(messageId);
-  const reply = await aiService.generateReply(fromWaId, text);
+  const reply = await aiService.generateReply(`wa:${fromWaId}`, text);
   await metaService.sendWhatsAppMessage(fromWaId, reply);
 }
 
-// ------------------------------------------------------------
-// Messenger (Facebook Page) API
-// ------------------------------------------------------------
 async function handleMessengerPayload(body) {
   for (const entry of body.entry || []) {
     for (const event of entry.messaging || []) {
-      // Skip delivery receipts, read receipts, postback-only events
-      // without a text message, and echoes of our own sent messages.
-      if (!event.message || event.message.is_echo) {
-        continue;
-      }
+      if (!event.message || event.message.is_echo) continue;
 
-      const senderPsid = event.sender.id;
-      const text = event.message.text;
+      const senderPsid = event.sender?.id;
+      const text = event.message.text?.trim();
+      const eventId = event.message.mid || `${entry.id || 'page'}:${event.timestamp || ''}:${senderPsid || ''}`;
 
-      if (!text) {
-        console.log('[webhookHandler] Skipping non-text Messenger message (attachment, sticker, etc.)');
+      if (alreadyProcessed(`messenger:${eventId}`)) continue;
+
+      if (!senderPsid || !text) {
+        console.log('[webhookHandler] Skipping non-text Messenger message.');
         continue;
       }
 
       console.log(`[Messenger] ${senderPsid}: ${text}`);
 
       replyMessenger(senderPsid, text).catch((err) =>
-        console.error('[webhookHandler] Messenger handling failed:', err)
+        console.error('[webhookHandler] Messenger handling failed:', err?.message || err)
       );
     }
   }
@@ -99,7 +99,7 @@ async function handleMessengerPayload(body) {
 
 async function replyMessenger(senderPsid, text) {
   await metaService.sendMessengerTypingOn(senderPsid);
-  const reply = await aiService.generateReply(senderPsid, text);
+  const reply = await aiService.generateReply(`messenger:${senderPsid}`, text);
   await metaService.sendMessengerMessage(senderPsid, reply);
 }
 

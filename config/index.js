@@ -1,44 +1,51 @@
 // ============================================================
 // config/index.js
-// Loads environment variables from .env and exposes them as a
-// single, validated config object used across the whole app.
+// Loads environment variables and exposes one validated config object.
 // ============================================================
 
 require('dotenv').config();
 
-// Small helper: throws a clear error at startup if a required
-// env var is missing, instead of failing confusingly later on.
 function required(name) {
   const value = process.env[name];
-  if (!value) {
-    throw new Error(
-      `Missing required environment variable "${name}". ` +
-      `Did you copy .env.example to .env and fill it in?`
-    );
+  if (!value || !String(value).trim()) {
+    throw new Error(`Missing required environment variable "${name}".`);
   }
-  return value;
+  return String(value).trim();
+}
+
+function positiveInt(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 const config = {
-  port: process.env.PORT || 3000,
+  port: positiveInt('PORT', 3000),
 
   meta: {
     verifyToken: required('META_VERIFY_TOKEN'),
+
+    // WhatsApp Cloud API token.
     accessToken: required('META_ACCESS_TOKEN'),
     whatsappPhoneNumberId: required('WHATSAPP_PHONE_NUMBER_ID'),
-    messengerPageAccessToken: process.env.MESSENGER_PAGE_ACCESS_TOKEN || required('META_ACCESS_TOKEN'),
+
+    // Messenger must use its Page Access Token. Keeping it separate avoids
+    // accidentally using the WhatsApp token for Facebook Page replies.
+    messengerPageAccessToken: required('MESSENGER_PAGE_ACCESS_TOKEN'),
+
+    // Override this in Render whenever you want to move to a newer Graph API version.
     graphApiVersion: process.env.GRAPH_API_VERSION || 'v21.0',
-    // Optional but STRONGLY recommended for production: the app's
-    // "App Secret" (Meta App Dashboard -> Settings -> Basic). When
-    // set, incoming webhook POSTs are cryptographically verified so
-    // nobody can spoof requests to your /webhook endpoint.
-    appSecret: process.env.META_APP_SECRET || null,
+
+    // Optional during initial setup, strongly recommended in production.
+    appSecret: process.env.META_APP_SECRET?.trim() || null,
   },
 
   ai: {
-    anthropicApiKey: required('ANTHROPIC_API_KEY'),
-    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-5',
-    maxHistoryMessages: parseInt(process.env.MAX_HISTORY_MESSAGES || '10', 10),
+    openaiApiKey: required('OPENAI_API_KEY'),
+    model: process.env.OPENAI_MODEL || 'gpt-5.6-luna',
+    maxHistoryMessages: positiveInt('MAX_HISTORY_MESSAGES', 10),
+    maxOutputTokens: positiveInt('OPENAI_MAX_OUTPUT_TOKENS', 500),
   },
 };
 
